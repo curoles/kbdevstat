@@ -7,7 +7,7 @@
 // Driver Information
 #define DRIVER_VERSION  "1.0.0"
 #define DRIVER_AUTHOR   "Igor Lesik"
-#define DRIVER_DESC     "Test module"
+#define DRIVER_DESC     "Keyboard Events module"
 #define DRIVER_LICENSE  "GPL"
 
 // Kernel Module Information

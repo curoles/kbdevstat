@@ -31,9 +31,12 @@ All right, but I already foresee two problems with this idea:
 2. I will have to handle events from USB internal or external keyboard separately,
    double work.
 
+## Can we install our interrupt handler for IRQ1?
+
 Let us explore first problem by using [IRQ handler example].
 The code explicitly removes existing handler by doing `free_irq(1, NULL);` inside `init_module()`.
 And the comments suggest that only one handler can be installed.
+Is it really the case?
 Let us test it with following code:
 
 ```c
@@ -72,18 +75,43 @@ Results:
    after the module was un-loaded, the system can't "find" it anymore and
    goes into the weeds.
 
- 
-Question: even if I can install second handler, what will `inb(0x64);/60` return? what is returned on second read?
+Looking at [`__free_irq(irq, dev_id)`](http://elixir.free-electrons.com/linux/latest/source/kernel/irq/manage.c#L1522)
+function one can see that it actually has facility to remove a handler
+from the chain by using `dev_id`.
 
-Information on Internet suggests that second `serio_register_driver(&atkbd_drv);` would not work too.
+Add code to function `kbdevstat_exit`:
 
+```c
+free_irq(KBD_IRQ, /*dev_id*/irq_handler);
+```
+
+It works! The system works after `insmod` and after `rmmod`.
+
+```terminal
+[ 6297.135644] kbdevstat: loading out-of-tree module taints kernel.
+[ 6297.135730] kbdevstat: module verification failed: signature and/or required key missing - tainting kernel
+[ 6297.136040] kbdevstat Initializing
+[ 6353.221547] kbdevstat Exiting
+```
+
+Great, after all it is possible to install our own interrupt handler
+on IRQ1 in addition to already installed by _atkbd_ handler.
+But will it ALL work if we call `inb(0x64/60)` from our handler?
+
+## Let us call `inb` inside our handler.
+
+<!-- References -->
 [IRQ handler example]: http://tldp.org/LDP/lkmpg/2.6/html/lkmpg.html#AEN1320
 [atkbd]: https://github.com/torvalds/linux/blob/master/drivers/input/keyboard/atkbd.c
 [usbkbd]: http://elixir.free-electrons.com/linux/latest/source/drivers/hid/usbhid/usbkbd.c
 
+<!--
 https://www.kernel.org/doc/Documentation/input/input.txt
 https://www.kernel.org/doc/Documentation/input/input-programming.txt
 http://www.kneuro.net/cgi-bin/lxr/http/source/drivers/input/keybdev.c
 
 http://www.linux.it/~rubini/docs/input/input.html
 
+Information on Internet suggests that second `serio_register_driver(&atkbd_drv);` would not work too.
+
+-->

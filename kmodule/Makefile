@@ -7,11 +7,9 @@ src_path := $(dir $(mkfile_path))
 
 TARGET_MODULE  := kbdevstat
 WARN    := -Wall
-#INCLUDE := -isystem /lib/modules/`uname -r`/build/include
-#CFLAGS  := -D__KERNEL__ ${WARN} ${INCLUDE}
-#ccflags-y += -std=c99
 CC      := gcc
-#OBJS    := ${patsubst %.c, %.o, ${wildcard *.c}}
+
+CFLAGS_${TARGET_MODULE}.o := -w -Wall -Werror -std=gnu99
 
 BUILDSYSTEM_DIR:=/lib/modules/$(shell uname -r)/build
 MSRC:=$(src_path)
@@ -37,11 +35,11 @@ clean:
 load:
 	sudo insmod ./$(TARGET_MODULE).ko
 	cat /proc/modules | grep $(TARGET_MODULE)
-	cat /var/log/syslog | grep Igor
+	cat /var/log/syslog | grep kbdevstat
 
 unload:
 	sudo rmmod ./$(TARGET_MODULE).ko
-	cat /var/log/syslog | grep Igor
+	cat /var/log/syslog | grep kbdevstat
 
 modinfo:
 	sudo modinfo $(MOUT)/$(TARGET_MODULE).ko
