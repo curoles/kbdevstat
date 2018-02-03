@@ -6,10 +6,10 @@ mkfile_path := $(abspath $(lastword $(MAKEFILE_LIST)))
 src_path := $(dir $(mkfile_path))
 
 TARGET_MODULE  := kbdevstat
-WARN    := -Wall
+#WARN    := -Wall
 CC      := gcc
 
-CFLAGS_${TARGET_MODULE}.o := -w -Wall -Werror -std=gnu99
+#CFLAGS_${TARGET_MODULE}.o := -W -Wall -Werror -std=gnu99
 
 BUILDSYSTEM_DIR:=/lib/modules/$(shell uname -r)/build
 MSRC:=$(src_path)

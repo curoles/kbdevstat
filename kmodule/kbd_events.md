@@ -98,7 +98,165 @@ Great, after all it is possible to install our own interrupt handler
 on IRQ1 in addition to already installed by _atkbd_ handler.
 But will it ALL work if we call `inb(0x64/60)` from our handler?
 
-## Let us call `inb` inside our handler.
+## Let us call `inb` inside our handler and see what happens.
+
+I will use Linux _workqueue_ for bottom-half of the interrupt handler.
+In the top-half I call `inb(0x60)` to get value of the scancode,
+then I copy this value into `kbd_work` structure and schedule the work
+in my work queue. In the bottom-half I just print the scancode to
+see with with `dmesg`.
+
+```c
+#include <linux/interrupt.h>
+//#include <linux/irq.h>
+#include <linux/workqueue.h>
+
+#define xstr(s) str(s)
+#define str(s) #s
+
+#define MODNAME kbdevstat
+#define MODULE_NAME xstr(MODNAME)
+#define KBD_IRQ 1
+
+#define KBD_HSC_Q_NAME "kbdscwq"
+
+static struct workqueue_struct *kbd_wq = NULL;
+
+static atomic_long_t interrupt_count;
+
+struct kbd_work {
+    struct work_struct work;
+    unsigned long scancode;
+} kbd_work;
+
+/* 
+ * This will get called by the kernel as soon as it's safe
+ * to do everything normally allowed by kernel modules.
+ */
+static void kbd_handle_scancode(struct work_struct *ws)
+{
+    struct kbd_work *kbdw = container_of(ws, struct kbd_work, work);
+    unsigned long scancode = kbdw->scancode;
+
+    printk(KERN_INFO MODULE_NAME ": Scan Code 0x%lx %s.\n",
+        scancode & 0x7F,
+        scancode & 0x80 ? "Released" : "Pressed");
+}
+
+/* 
+ * This function services keyboard interrupts. It reads the relevant
+ * information from the keyboard and then puts the non time critical
+ * part into the work queue. This will be run when the kernel considers it safe.
+ */
+irqreturn_t irq_handler(int irq, void *dev_id)
+{
+    unsigned char status;
+    unsigned char scancode;
+
+    atomic_long_inc(&interrupt_count);
+
+    /* 
+     * Read keyboard status and scancode
+     */
+    status = inb(0x64);
+    scancode = inb(0x60);
+
+    INIT_WORK(&kbd_work.work, kbd_handle_scancode);
+    kbd_work.scancode = scancode;
+
+    queue_work(kbd_wq, &kbd_work.work);
+
+    return IRQ_HANDLED;
+}
+
+static
+int __init kbdevstat_init(void) {
+
+    int irq_request_result = -1;
+
+    printk(KERN_INFO MODULE_NAME ": Initializing\n");
+
+    atomic_long_set(&interrupt_count, 0);
+
+    kbd_wq = create_singlethread_workqueue(KBD_HSC_Q_NAME);
+
+    if (kbd_wq == NULL) {
+        printk(KERN_ALERT MODULE_NAME ": can't create workqueue");
+        return -1;
+    }
+
+    irq_request_result =
+        request_irq(KBD_IRQ,
+                    irq_handler,
+                    /*flags*/  IRQF_SHARED,
+                    /*name*/   "test_keyboard_irq_handler",
+                    /*dev_id*/ (void *)(irq_handler));
+
+    return irq_request_result;
+}
+
+static
+void __exit kbdevstat_exit(void) {
+
+    printk(KERN_INFO MODULE_NAME ": Exiting after %lu interrupts\n",
+        atomic_long_read(&interrupt_count));
+
+    free_irq(KBD_IRQ, /*dev_id*/irq_handler);
+
+    if (kbd_wq) {
+        destroy_workqueue(kbd_wq);
+    }
+}
+```
+
+Results:
+
+1. It works somehow.
+2. The keyboard stays responsive.
+3. I do not observe any missing keystrokes.
+
+```terminal
+$ 123456                     => 6 letters + 1[Enter]
+$ sudo rmmod ./kbdevstat.ko  => 4[Arrow] + 1[Enter]
+----------------------------------------------------
+                                12 times
+```
+
+```terminal
+[17924.134751] kbdevstat: Scan Code 0x1c Released.
+[17926.290520] kbdevstat: Scan Code 0x2 Pressed.    1
+[17926.401790] kbdevstat: Scan Code 0x2 Released.
+[17926.785378] kbdevstat: Scan Code 0x3 Pressed.    2
+[17926.880517] kbdevstat: Scan Code 0x3 Released.
+[17927.215976] kbdevstat: Scan Code 0x4 Pressed.    3
+[17927.319252] kbdevstat: Scan Code 0x4 Released.
+[17927.630762] kbdevstat: Scan Code 0x5 Pressed.    4
+[17927.806131] kbdevstat: Scan Code 0x5 Released.
+[17928.164981] kbdevstat: Scan Code 0x6 Pressed.    5
+[17928.292304] kbdevstat: Scan Code 0x6 Released.
+[17928.659732] kbdevstat: Scan Code 0x7 Pressed.    6
+[17928.762928] kbdevstat: Scan Code 0x7 Released.
+[17930.508630] kbdevstat: Scan Code 0x1c Pressed.   7 Enter
+[17930.587844] kbdevstat: Scan Code 0x1c Released.
+[17940.961820] kbdevstat: Scan Code 0x60 Released.
+[17940.962463] kbdevstat: Scan Code 0x48 Pressed.   8
+[17941.072696] kbdevstat: Scan Code 0x60 Released.
+[17941.073619] kbdevstat: Scan Code 0x48 Released.  
+[17941.968335] kbdevstat: Scan Code 0x60 Released.
+[17941.968845] kbdevstat: Scan Code 0x48 Pressed.   9
+[17942.047089] kbdevstat: Scan Code 0x60 Released.
+[17942.047854] kbdevstat: Scan Code 0x48 Released.
+[17943.046862] kbdevstat: Scan Code 0x60 Released.
+[17943.047201] kbdevstat: Scan Code 0x48 Pressed.   10
+[17943.117668] kbdevstat: Scan Code 0x60 Released.
+[17943.118354] kbdevstat: Scan Code 0x48 Released.
+[17943.789247] kbdevstat: Scan Code 0x60 Released.
+[17943.789833] kbdevstat: Scan Code 0x48 Pressed.   11
+[17943.868098] kbdevstat: Scan Code 0x60 Released.
+[17943.868796] kbdevstat: Scan Code 0x48 Released.
+[17947.419083] kbdevstat: Scan Code 0x1c Pressed.   12 Enter
+[17947.432750] kbdevstat: Exiting after 32 interrupts
+```
 
 <!-- References -->
 [IRQ handler example]: http://tldp.org/LDP/lkmpg/2.6/html/lkmpg.html#AEN1320

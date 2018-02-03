@@ -11,12 +11,14 @@
 
 #define KBD_HSC_Q_NAME "kbdscwq"
 
-static struct workqueue_struct *kbd_handle_scancode_workqueue;
-//static struct work_struct kbd_handle_scancode_task;
-//static DECLARE_WORK(mykmod_work, mykmod_work_handler);
-//static unsigned char scancode;
-// alternative to using data field is something like:
-// https://github.com/fervagar/kernel_modules/blob/master/workQueue.c
+static struct workqueue_struct *kbd_wq = NULL;
+
+static atomic_long_t interrupt_count;
+
+struct kbd_work {
+    struct work_struct work;
+    unsigned long scancode;
+} kbd_work;
 
 /* 
  * This will get called by the kernel as soon as it's safe
@@ -24,14 +26,13 @@ static struct workqueue_struct *kbd_handle_scancode_workqueue;
  */
 static void kbd_handle_scancode(struct work_struct *ws)
 {
-    unsigned long scancode = atomic_long_read(&ws->data);
+    struct kbd_work *kbdw = container_of(ws, struct kbd_work, work);
+    unsigned long scancode = kbdw->scancode;
 
-    printk(KERN_INFO MODULE_NAME ": Scan Code %x %s.\n",
+    printk(KERN_INFO MODULE_NAME ": Scan Code 0x%lx %s.\n",
         scancode & 0x7F,
         scancode & 0x80 ? "Released" : "Pressed");
 }
-
-static DECLARE_WORK(kbd_handle_scancode_task, kbd_handle_scancode);
 
 /* 
  * This function services keyboard interrupts. It reads the relevant
@@ -43,15 +44,18 @@ irqreturn_t irq_handler(int irq, void *dev_id)
     unsigned char status;
     unsigned char scancode;
 
+    atomic_long_inc(&interrupt_count);
+
     /* 
      * Read keyboard status and scancode
      */
-    status = 0;//inb(0x64);
-    scancode = 55;//inb(0x60);
+    status = inb(0x64);
+    scancode = inb(0x60);
 
-    atomic_long_set(&(kbd_handle_scancode_task.data), scancode);
+    INIT_WORK(&kbd_work.work, kbd_handle_scancode);
+    kbd_work.scancode = scancode;
 
-    queue_work(kbd_handle_scancode_workqueue, &kbd_handle_scancode_task);
+    queue_work(kbd_wq, &kbd_work.work);
 
     return IRQ_HANDLED;
 }
@@ -63,16 +67,14 @@ int __init kbdevstat_init(void) {
 
     printk(KERN_INFO MODULE_NAME ": Initializing\n");
 
-    kbd_handle_scancode_workqueue = create_singlethread_workqueue(KBD_HSC_Q_NAME);
-    INIT_WORK(&kbd_handle_scancode_task, kbd_handle_scancode);
+    atomic_long_set(&interrupt_count, 0);
 
-    //if (!can_request_irq(KBD_IRQ, IRQF_SHARED)) {
-    //    printk(KERN_ALERT MODULE_NAME " Can't request IRQ " str(KBD_IRQ) "\n");
-    //    return 1;
-    //}
+    kbd_wq = create_singlethread_workqueue(KBD_HSC_Q_NAME);
 
-    // TODO bool irq_percpu_is_enabled(unsigned int irq)
-    // TODO Do I care about request_threaded_irq()?
+    if (kbd_wq == NULL) {
+        printk(KERN_ALERT MODULE_NAME ": can't create workqueue");
+        return -1;
+    }
 
     irq_request_result =
         request_irq(KBD_IRQ,
@@ -86,12 +88,14 @@ int __init kbdevstat_init(void) {
 
 static
 void __exit kbdevstat_exit(void) {
-    printk(KERN_INFO MODULE_NAME ": Exiting\n");
+
+    printk(KERN_INFO MODULE_NAME ": Exiting after %lu interrupts\n",
+        atomic_long_read(&interrupt_count));
 
     free_irq(KBD_IRQ, /*dev_id*/irq_handler);
 
-    flush_work(&kbd_handle_scancode_task);
-
-    destroy_workqueue(kbd_handle_scancode_workqueue);
+    if (kbd_wq) {
+        destroy_workqueue(kbd_wq);
+    }
 }
 
