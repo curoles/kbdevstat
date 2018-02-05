@@ -258,10 +258,69 @@ $ sudo rmmod ./kbdevstat.ko  => 4[Arrow] + 1[Enter]
 [17947.432750] kbdevstat: Exiting after 32 interrupts
 ```
 
+Lessons learned:
+
+1. Do NOT use `data` field of `queue_work` structure to bring data
+   from interrupt handler to bottom-half, it breaks the queue.
+2. Need to use `INIT_WORK` **EVERY** time before calling `queue_work`.
+
+Let's see `INIT_WORK` implementation in [workqueue] header file.
+
+```c
+#define __INIT_WORK(_work, _func, _onstack)				\
+	do {								\
+		__init_work((_work), _onstack);				\
+		(_work)->data = (atomic_long_t) WORK_DATA_INIT();	\
+		INIT_LIST_HEAD(&(_work)->entry);			\
+		(_work)->func = (_func);				\
+```
+
+First, it is obvious that `data` field is used internally.
+
+`__init_work` calls `__debug_object_init`
+
+```c
+static void
+__debug_object_init(void *addr, struct debug_obj_descr *descr, int onstack)
+{
+...
+	db = get_bucket((unsigned long) addr);
+
+	raw_spin_lock_irqsave(&db->lock, flags);
+
+	obj = lookup_object(addr, db);
+	if (!obj) {
+		obj = alloc_object(addr, db, descr);
+		if (!obj) {
+```
+
+```c
+static inline void INIT_LIST_HEAD(struct list_head *list)
+{
+	WRITE_ONCE(list->next, list);
+	list->prev = list;
+}
+```
+
+`queue_work` calls `insert_work` that calls `list_add_tail`, where the list
+is `worklist = &pwq->pool->worklist`.
+
+```c
+static void insert_work(struct pool_workqueue *pwq, struct work_struct *work,
+			struct list_head *head, unsigned int extra_flags)
+{
+	struct worker_pool *pool = pwq->pool;
+
+	/* we own @work, set data and link */
+	set_work_pwq(work, pwq, extra_flags);
+	list_add_tail(&work->entry, head);
+```
+
 <!-- References -->
 [IRQ handler example]: http://tldp.org/LDP/lkmpg/2.6/html/lkmpg.html#AEN1320
 [atkbd]: https://github.com/torvalds/linux/blob/master/drivers/input/keyboard/atkbd.c
 [usbkbd]: http://elixir.free-electrons.com/linux/latest/source/drivers/hid/usbhid/usbkbd.c
+[workqueue]: http://elixir.free-electrons.com/linux/v4.3.1/source/include/linux/workqueue.h
 
 <!--
 https://www.kernel.org/doc/Documentation/input/input.txt
