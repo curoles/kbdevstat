@@ -7,11 +7,15 @@
  *  http://tldp.org/LDP/lkmpg/2.6/html/lkmpg.html
  *  https://lwn.net/Kernel/LDD3/
  */
+//#define DEBUG  // see https://www.kernel.org/doc/local/pr_debug.txt
+
 #include <linux/init.h>   // __init and __exit macros
 #include <linux/module.h>
 
 #include <linux/interrupt.h> // to observe IRQ1 line from PS2 keyboard 
 #include <linux/workqueue.h> // to call bottom-halfs
+
+#include "kbdata.h"
 
 // Driver Information
 #define KBDEVSTAT_VERSION  "1.0.0"
@@ -41,8 +45,6 @@ MODULE_LICENSE    (KBDEVSTAT_LICENSE);
 /// Workqueue do move processing code out from interrupt handlers.
 static struct workqueue_struct *kbd_wq = NULL;
 
-/// Static variable to keep total count of interrupts for PS2 keyboard.
-static atomic_long_t interrupt_count;
 
 /// Structure that transfers data from keyboard interrupt handler to bottom-half. 
 struct kbd_work {
@@ -60,10 +62,10 @@ struct kbd_work kbd_work;
  */
 static void kbd_handle_scancode(struct work_struct *ws)
 {
-    struct kbd_work *kbd_data = container_of(ws, struct kbd_work, work);
-    unsigned long scancode = kbd_data->scancode;
+    struct kbd_work *kbdw = container_of(ws, struct kbd_work, work);
+    unsigned long scancode = kbdw->scancode;
 
-    printk(KERN_INFO MODULE_NAME ": Scan Code 0x%lx %s.\n",
+    pr_debug(KERN_INFO MODULE_NAME ": Scan Code 0x%lx %s.\n",
         scancode & 0x7F,
         scancode & 0x80 ? "Released" : "Pressed");
 }
@@ -78,7 +80,7 @@ irqreturn_t irq_handler(int irq, void *dev_id)
     unsigned char status;
     unsigned char scancode;
 
-    atomic_long_inc(&interrupt_count);
+    atomic_long_inc(&kbdata_instance()->ps2_kbd_interrupts);
 
     /* 
      * Read keyboard status and scancode
@@ -100,29 +102,45 @@ irqreturn_t irq_handler(int irq, void *dev_id)
  *  2. Install interrupt handler for PS2 keyboard line IRQ1.
  */
 static
-int __init kbdevstat_init(void) {
-
-    int irq_request_result = -1;
+int __init kbdevstat_init(void)
+{
+    int err = 0;
 
     printk(KERN_INFO MODULE_NAME ": Initializing\n");
 
-    atomic_long_set(&interrupt_count, 0);
+    err = kbdata_init(kbdata_instance());
+
+    if (err) {
+        pr_info(MODULE_NAME ": can't init data\n");
+        goto do_kbdata_clean;
+    }
 
     kbd_wq = create_singlethread_workqueue(KBDEVSTAT_WQ_NAME);
 
     if (kbd_wq == NULL) {
-        printk(KERN_ALERT MODULE_NAME ": can't create workqueue");
-        return -1;
+        printk(KERN_ALERT MODULE_NAME ": can't create workqueue\n");
+        goto do_kbdata_clean;
     }
 
-    irq_request_result =
-        request_irq(KBD_IRQ,
+    err = request_irq(KBD_IRQ,
                     irq_handler,
                     /*flags*/  IRQF_SHARED,
                     /*name*/   "test_keyboard_irq_handler",
                     /*dev_id*/ (void *)(irq_handler));
 
-    return irq_request_result;
+    if (err) {
+        pr_alert(MODULE_NAME ": can't request IRQ1\n");
+        goto do_kbd_wq_clean;
+    }
+
+    return err;
+
+do_kbd_wq_clean:
+    if (kbd_wq) { destroy_workqueue(kbd_wq); }
+do_kbdata_clean:
+    kbdata_clean(kbdata_instance());
+
+    return err;
 }
 
 /** Cleans and de-allocates resources once module gets un-loaded.
@@ -134,13 +152,16 @@ static
 void __exit kbdevstat_exit(void) {
 
     printk(KERN_INFO MODULE_NAME ": Exiting after %lu interrupts\n",
-        atomic_long_read(&interrupt_count));
+        atomic_long_read(&kbdata_instance()->ps2_kbd_interrupts));
+
+    kbdata_clean(kbdata_instance());
 
     free_irq(KBD_IRQ, /*dev_id=*/irq_handler);
 
     if (kbd_wq) {
         destroy_workqueue(kbd_wq);
     }
+
 }
 
 

@@ -5,22 +5,15 @@
 mkfile_path := $(abspath $(lastword $(MAKEFILE_LIST)))
 src_path := $(dir $(mkfile_path))
 
-TARGET_MODULE  := kbdevstat
-#WARN    := -Wall
-CC      := gcc
-
-#CFLAGS_${TARGET_MODULE}.o := -W -Wall -Werror -std=gnu99
+TARGET_MODULE  := kbdevst
 
 BUILDSYSTEM_DIR:=/lib/modules/$(shell uname -r)/build
 MSRC:=$(src_path)
 # is it even possible to build somewhere else? O= did not work
 MOUT:=$(src_path)
 
-$(TARGET_MODULE)-objs := #igor_kmodule.o
 obj-m := $(TARGET_MODULE).o
-
-#${TARGET}.o: ${TARGET}.c
-
+$(TARGET_MODULE)-y := kbdevstat.o kbdata.o
 
 all : 
 	# run kernel build system to make module
